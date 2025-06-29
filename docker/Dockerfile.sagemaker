@@ -1,0 +1,78 @@
+# GPU-optimized Dockerfile with complete dependencies
+FROM nvidia/cuda:12.1.1-runtime-ubuntu22.04 as base
+
+
+# Set environment variables
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PIP_NO_CACHE_DIR=1
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install Python and minimal dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.10 \
+    python3.10-dev \
+    python3.10-venv \  
+    python3-pip \
+    git \
+    wget \
+    curl \
+ && ln -s /usr/bin/python3.10 /usr/bin/python \
+ && rm -rf /var/lib/apt/lists/* \
+ && apt-get clean
+
+# ============================================
+# Stage 1: Build dependencies
+# ============================================
+FROM base as builder
+
+WORKDIR /build
+
+# Copy requirements
+COPY docker/requirements.txt ./requirements.txt
+
+# Create virtual environment
+RUN python -m pip install --upgrade pip
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Install PyTorch with CUDA support (specific version for smaller size)
+RUN pip install --no-cache-dir \
+    torch==2.2.2 \
+    torchvision==0.17.2 \
+    torchaudio==2.2.2 \
+    --extra-index-url https://download.pytorch.org/whl/cu121
+
+# Install other dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+
+# ============================================
+# Stage 2: Runtime image
+# ============================================
+FROM base as runtime
+
+# Copy virtual environment from builder
+COPY --from=builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+WORKDIR /opt/ml/code
+
+# Copy only essential source files
+COPY modelfactory/ ./modelfactory/
+COPY sagemaker/train.py ./train.py
+COPY setup.py ./
+
+# Install package without dependencies (already installed)
+RUN pip install --no-deps .
+
+# Verify installation
+RUN python -c "import modelfactory; print('modelfactory package installed successfully')"
+
+# Clean up any remaining cache
+RUN find /opt/venv -name "*.pyc" -delete \
+    && find /opt/venv -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
+
+RUN chmod +x /opt/ml/code/train.py
+
+ENTRYPOINT ["python", "/opt/ml/code/train.py"] 
