@@ -1,0 +1,16 @@
+# Essential ML dependencies only
+transformers
+peft
+accelerate
+runpod
+
+# Data processing
+scikit-learn
+pillow
+
+# AWS dependencies
+boto3
+
+# Utilities
+tqdm
+python-dotenv 

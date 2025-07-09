@@ -1,0 +1,54 @@
+# RunPod Serverless GPU Training Dockerfile
+FROM runpod/pytorch:2.2.0-py3.10-cuda12.1.1-devel-ubuntu22.04
+
+# Set environment variables
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PIP_NO_CACHE_DIR=1
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    wget \
+    curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+# Set working directory
+WORKDIR /app
+
+# Copy requirements and install Python dependencies
+COPY requirements.txt ./requirements.txt
+
+# Debug: Check if requirements.txt exists and show its contents
+RUN ls -la requirements.txt && cat requirements.txt
+
+# Install Python dependencies with better error handling
+RUN pip install --no-cache-dir --upgrade pip
+
+# Install packages one by one to handle conflicts better
+RUN pip install --no-cache-dir transformers peft accelerate runpod scikit-learn pillow boto3 tqdm python-dotenv
+
+# Copy source code
+COPY modelfactory/ ./modelfactory/
+COPY setup.py ./
+COPY runpod_handler.py ./
+COPY runpod_training.py ./
+
+# Install the package
+RUN pip install --no-deps .
+
+# Verify installation
+RUN python -c "import modelfactory; print('modelfactory package installed successfully')"
+
+# Create necessary directories
+RUN mkdir -p /app/tmp /app/models /app/logs
+
+# Clean up
+RUN find /opt/conda -name "*.pyc" -delete && \
+    find /opt/conda -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
+
+# Set the handler as the entry point
+CMD ["python", "runpod_handler.py"] 
