@@ -33,8 +33,8 @@ echo
 echo "Configuration loaded:"
 echo "ENDPOINT_URL: ${ENDPOINT_URL:-'Not set'}"
 echo "API_KEY: ${API_KEY:+${API_KEY:0:10}...}"
-echo "AWS_ACCESS_KEY: ${AWS_ACCESS_KEY:+${AWS_ACCESS_KEY:0:10}...}"
-echo "AWS_SECRET_KEY: ${AWS_SECRET_KEY:+***set***}"
+echo "AWS_ACCESS_KEY: ${AWS_ACCESS_KEY}"
+echo "AWS_SECRET_KEY: ${AWS_SECRET_KEY}"
 echo "S3_BUCKET: ${S3_BUCKET:-'Not set'}"
 echo "AWS_REGION: ${AWS_REGION:-'Not set'}"
 echo
@@ -184,7 +184,7 @@ if [ "$http_code" = "200" ]; then
     echo "   - runpod_endpoint_url = $ENDPOINT_URL"
     echo "   - runpod_api_key = $API_KEY"
     echo "   - aws_access_key_id = $AWS_ACCESS_KEY"
-    echo "   - aws_secret_access_key = [your-secret]"
+    echo "   - aws_secret_access_key = $AWS_SECRET_KEY"
     echo "2. Deploy your Airflow DAG"
     echo "3. Run your training job!"
 else

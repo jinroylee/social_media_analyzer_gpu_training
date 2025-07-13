@@ -70,10 +70,19 @@ except ImportError:
     def create_experiment_config(**kwargs):
         return kwargs
 
-def load_pkl_from_s3(bucket_name, key):
+def load_pkl_from_s3(bucket_name, key, aws_config=None):
     """Load pickle data from S3"""
     try:
-        s3_client = boto3.client('s3')
+        if aws_config:
+            s3_client = boto3.client(
+                's3',
+                aws_access_key_id=aws_config['aws_access_key_id'],
+                aws_secret_access_key=aws_config['aws_secret_access_key'],
+                region_name=aws_config['aws_region']
+            )
+        else:
+            s3_client = boto3.client('s3')
+        
         response = s3_client.get_object(Bucket=bucket_name, Key=key)
         pkl_data = pickle.loads(response['Body'].read())
         return pkl_data
@@ -81,10 +90,18 @@ def load_pkl_from_s3(bucket_name, key):
         logger.error(f"Error loading pickle from S3 {key}: {e}")
         raise
 
-def save_model_to_s3(model, bucket_name, s3_key):
+def save_model_to_s3(model, bucket_name, s3_key, aws_config=None):
     """Save PyTorch model state dict to S3"""
     try:
-        s3_client = boto3.client('s3')
+        if aws_config:
+            s3_client = boto3.client(
+                's3',
+                aws_access_key_id=aws_config['aws_access_key_id'],
+                aws_secret_access_key=aws_config['aws_secret_access_key'],
+                region_name=aws_config['aws_region']
+            )
+        else:
+            s3_client = boto3.client('s3')
         
         # Save model to a BytesIO buffer
         buffer = BytesIO()
@@ -99,38 +116,43 @@ def save_model_to_s3(model, bucket_name, s3_key):
             ContentType='application/octet-stream'
         )
         
-        logger.info(f"Model successfully saved to s3://{bucket_name}/{s3_key}")
-        return True
+        logger.info(f"Model saved to S3: s3://{bucket_name}/{s3_key}")
+        return f"s3://{bucket_name}/{s3_key}"
         
     except ClientError as e:
-        logger.error(f"Error saving model to S3: {e}")
-        return False
-    except Exception as e:
-        logger.error(f"Unexpected error saving model to S3: {e}")
-        return False
+        logger.error(f"Error saving model to S3 {s3_key}: {e}")
+        raise
 
-def save_config_to_s3(config, bucket_name, s3_key):
-    """Save model configuration to S3"""
+def save_config_to_s3(config, bucket_name, s3_key, aws_config=None):
+    """Save configuration dictionary to S3 as JSON"""
     try:
-        s3_client = boto3.client('s3')
+        if aws_config:
+            s3_client = boto3.client(
+                's3',
+                aws_access_key_id=aws_config['aws_access_key_id'],
+                aws_secret_access_key=aws_config['aws_secret_access_key'],
+                region_name=aws_config['aws_region']
+            )
+        else:
+            s3_client = boto3.client('s3')
         
-        # Convert config to JSON string
-        config_json = json.dumps(config, indent=2)
+        # Convert config to JSON
+        config_json = json.dumps(config, indent=2, default=str)
         
         # Upload to S3
         s3_client.put_object(
             Bucket=bucket_name,
             Key=s3_key,
-            Body=config_json.encode('utf-8'),
+            Body=config_json,
             ContentType='application/json'
         )
         
-        logger.info(f"Config successfully saved to s3://{bucket_name}/{s3_key}")
-        return True
+        logger.info(f"Config saved to S3: s3://{bucket_name}/{s3_key}")
+        return f"s3://{bucket_name}/{s3_key}"
         
     except ClientError as e:
-        logger.error(f"Error saving config to S3: {e}")
-        return False
+        logger.error(f"Error saving config to S3 {s3_key}: {e}")
+        raise
 
 def create_local_model_artifacts(model, hyperparams):
     """Create model artifacts locally"""
@@ -192,6 +214,53 @@ def evaluate(model, dataloader, device):
     
     return mae, correlation, r2, avg_loss
 
+def load_and_process_training_data(aws_config):
+    """Load training data from S3 and process images"""
+    logger.info("Loading training data from S3...")
+    
+    # Load the raw training data
+    data = load_pkl_from_s3(aws_config['s3_bucket'], "processed/train.pkl", aws_config)
+    logger.info(f"Loaded {len(data)} training samples")
+    
+    # Create S3 client for image loading
+    s3_client = boto3.client(
+        's3',
+        aws_access_key_id=aws_config['aws_access_key_id'],
+        aws_secret_access_key=aws_config['aws_secret_access_key'],
+        region_name=aws_config['aws_region']
+    )
+    
+    # Process each item to load images
+    processed_data = []
+    logger.info("Processing images from S3...")
+    
+    for i, item in enumerate(data):
+        try:
+            # Load image from S3
+            image_key = item['thumbnail_path']
+            response = s3_client.get_object(Bucket=aws_config['s3_bucket'], Key=image_key)
+            image_data = response['Body'].read()
+            
+            # Convert to PIL Image
+            image = Image.open(BytesIO(image_data))
+            
+            # Create processed item with image data
+            processed_item = item.copy()
+            processed_item['image'] = image
+            processed_data.append(processed_item)
+            
+            # Log progress every 1000 items
+            if (i + 1) % 1000 == 0:
+                logger.info(f"Processed {i + 1}/{len(data)} images")
+                
+        except Exception as e:
+            logger.warning(f"Failed to load image {item.get('thumbnail_path', 'unknown')}: {e}")
+            # Skip this item if image loading fails
+            continue
+    
+    logger.info(f"Successfully processed {len(processed_data)} samples with images")
+    return processed_data
+
 def train_model(hyperparams, aws_config):
     """
     Main training function for RunPod serverless environment.
@@ -246,9 +315,7 @@ def train_model(hyperparams, aws_config):
         tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
         
         # Load data from S3
-        logger.info("Loading training data from S3...")
-        data = load_pkl_from_s3(aws_config['s3_bucket'], "processed/train.pkl")
-        logger.info(f"Loaded {len(data)} training samples")
+        data = load_and_process_training_data(aws_config)
         
         # Create dataset
         logger.info("Creating dataset...")
@@ -375,8 +442,8 @@ def train_model(hyperparams, aws_config):
         config_s3_key = f"models/runpod_config_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
         
         # Upload model to S3
-        model_uploaded = save_model_to_s3(model, aws_config['s3_bucket'], model_s3_key)
-        config_uploaded = save_config_to_s3(config, aws_config['s3_bucket'], config_s3_key)
+        model_uploaded = save_model_to_s3(model, aws_config['s3_bucket'], model_s3_key, aws_config)
+        config_uploaded = save_config_to_s3(config, aws_config['s3_bucket'], config_s3_key, aws_config)
         
         # Log final metrics
         final_metrics = {
