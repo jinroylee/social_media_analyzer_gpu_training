@@ -215,50 +215,27 @@ def evaluate(model, dataloader, device):
     return mae, correlation, r2, avg_loss
 
 def load_and_process_training_data(aws_config):
-    """Load training data from S3 and process images"""
+    """Load training data from S3 but keep images as S3 keys (lazy loading)"""
     logger.info("Loading training data from S3...")
     
     # Load the raw training data
     data = load_pkl_from_s3(aws_config['s3_bucket'], "processed/train.pkl", aws_config)
     logger.info(f"Loaded {len(data)} training samples")
     
-    # Create S3 client for image loading
-    s3_client = boto3.client(
-        's3',
-        aws_access_key_id=aws_config['aws_access_key_id'],
-        aws_secret_access_key=aws_config['aws_secret_access_key'],
-        region_name=aws_config['aws_region']
-    )
-    
-    # Process each item to load images
+    # Don't load images here - just keep the S3 keys
     processed_data = []
-    logger.info("Processing images from S3...")
-    
     for i, item in enumerate(data):
-        try:
-            # Load image from S3
-            image_key = item['thumbnail_path']
-            response = s3_client.get_object(Bucket=aws_config['s3_bucket'], Key=image_key)
-            image_data = response['Body'].read()
-            
-            # Convert to PIL Image
-            image = Image.open(BytesIO(image_data))
-            
-            # Create processed item with image data
-            processed_item = item.copy()
-            processed_item['image'] = image
-            processed_data.append(processed_item)
-            
-            # Log progress every 1000 items
-            if (i + 1) % 1000 == 0:
-                logger.info(f"Processed {i + 1}/{len(data)} images")
-                
-        except Exception as e:
-            logger.warning(f"Failed to load image {item.get('thumbnail_path', 'unknown')}: {e}")
-            # Skip this item if image loading fails
-            continue
+        # Create processed item with S3 key instead of loaded image
+        processed_item = item.copy()
+        # Keep the S3 key for lazy loading
+        processed_item['s3_bucket'] = aws_config['s3_bucket']
+        processed_item['aws_config'] = aws_config
+        processed_data.append(processed_item)
+        
+        if (i + 1) % 1000 == 0:
+            logger.info(f"Processed {i + 1}/{len(data)} metadata")
     
-    logger.info(f"Successfully processed {len(processed_data)} samples with images")
+    logger.info(f"Successfully processed {len(processed_data)} samples (lazy loading)")
     return processed_data
 
 def train_model(hyperparams, aws_config):
